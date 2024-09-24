@@ -14,8 +14,6 @@ pipeline {
                     command:
                     - cat
                     tty: true
-                    securityContext:
-                      privileged: true
             '''
         }
     }
@@ -111,8 +109,9 @@ pipeline {
         }
     }
     
-    post {
-        always {
+post {
+    always {
+        node {
             container('podman') {
                 sh "podman logout quay.io"
             }
