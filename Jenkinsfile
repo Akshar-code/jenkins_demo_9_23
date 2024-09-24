@@ -4,7 +4,7 @@ pipeline {
     environment {
         QUAY_REPO = "quay.io/rh-ee-akottuva/jenkins-testing-9-23"
         IMAGE_TAG = "v${BUILD_NUMBER}"
-        COSIGN_URL = "https://cli-server-trusted-artifact-signer.apps.cluster-t55vs.t55vs.sandbox1621.opentlc.com/clients/linux/cosign-amd64.gz"
+        COSIGN_URL = "https://cli-server-trusted-artifact-signer.apps.cluster-jgbvb.jgbvb.sandbox1676.opentlc.com/clients/linux/cosign-amd64.gz"
     }
     
     stages {
