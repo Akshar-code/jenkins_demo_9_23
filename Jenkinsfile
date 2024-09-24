@@ -8,17 +8,19 @@ pipeline {
     }
     
     stages {
-        stage('Build Container Image') {
+        stage('Build Docker Image') {
             steps {
                 script {
-                    openshift.withCluster() {
-                        openshift.withProject() {
-                            def buildConfig = openshift.selector("bc", "jenkins-testing-9-23")
-                            if (!buildConfig.exists()) {
-                                openshift.newBuild("--name=jenkins-testing-9-23", "--docker-image=quay.io/buildah/stable:latest", "--binary=true")
-                            }
-                            openshift.startBuild("jenkins-testing-9-23", "--from-dir=.")
-                        }
+                    docker.build("${QUAY_REPO}:${IMAGE_TAG}")
+                }
+            }
+        }
+
+        stage('Login to Quay.io') {
+            steps {
+                script {
+                    withCredentials([usernamePassword(credentialsId: 'quay-credentials', usernameVariable: 'QUAY_USER', passwordVariable: 'QUAY_PASS')]) {
+                        sh "echo \$QUAY_PASS | docker login quay.io -u \$QUAY_USER --password-stdin"
                     }
                 }
             }
@@ -26,15 +28,7 @@ pipeline {
 
         stage('Push to Quay.io') {
             steps {
-                script {
-                    openshift.withCluster() {
-                        openshift.withProject() {
-                            def is = openshift.selector("is", "jenkins-testing-9-23").object()
-                            def imageReference = is.status.dockerImageRepository + ":" + IMAGE_TAG
-                            openshift.tag(imageReference, "${QUAY_REPO}:${IMAGE_TAG}")
-                        }
-                    }
-                }
+                sh "docker push ${QUAY_REPO}:${IMAGE_TAG}"
             }
         }
         
@@ -49,34 +43,46 @@ pipeline {
             }
         }
 
-        stage('Sign Container Image') {
+        stage('Sign Docker Image') {
             steps {
-                withCredentials([
-                    file(credentialsId: 'cosign-private-key', variable: 'COSIGN_PRIVATE_KEY'),
-                    string(credentialsId: 'cosign-password', variable: 'COSIGN_PASSWORD')
-                ]) {
-                    sh """
-                        echo "Signing the image..."
-                        echo \$COSIGN_PASSWORD | ./cosign sign --key \$COSIGN_PRIVATE_KEY --tlog-upload=false ${QUAY_REPO}:${IMAGE_TAG}
-                    """
+                script {
+                    withCredentials([
+                        file(credentialsId: 'cosign-private-key', variable: 'COSIGN_PRIVATE_KEY'),
+                        string(credentialsId: 'cosign-password', variable: 'COSIGN_PASSWORD')
+                    ]) {
+                        sh """
+                            echo "Getting image digest..."
+                            IMAGE_DIGEST=\$(docker inspect --format='{{index .RepoDigests 0}}' ${QUAY_REPO}:${IMAGE_TAG})
+                            echo "Image digest: \$IMAGE_DIGEST"
+
+                            echo "Signing the image..."
+                            echo \$COSIGN_PASSWORD | ./cosign sign --key \$COSIGN_PRIVATE_KEY --tlog-upload=false \$IMAGE_DIGEST
+                        """
+                    }
                 }
             }
         }
 
         stage('Verify Signature') {
             steps {
-                withCredentials([file(credentialsId: 'cosign-public-key', variable: 'COSIGN_PUBLIC_KEY')]) {
-                    sh """
-                        echo "Verifying the signature..."
-                        ./cosign verify --key \$COSIGN_PUBLIC_KEY --insecure-ignore-tlog=true ${QUAY_REPO}:${IMAGE_TAG}
+                script {
+                    withCredentials([file(credentialsId: 'cosign-public-key', variable: 'COSIGN_PUBLIC_KEY')]) {
+                        sh """
+                            echo "Getting image digest..."
+                            IMAGE_DIGEST=\$(docker inspect --format='{{index .RepoDigests 0}}' ${QUAY_REPO}:${IMAGE_TAG})
+                            echo "Image digest: \$IMAGE_DIGEST"
 
-                        if [ \$? -eq 0 ]; then
-                            echo "Signature verification successful!"
-                        else
-                            echo "Signature verification failed!"
-                            exit 1
-                        fi
-                    """
+                            echo "Verifying the signature..."
+                            ./cosign verify --key \$COSIGN_PUBLIC_KEY --insecure-ignore-tlog=true \$IMAGE_DIGEST
+
+                            if [ \$? -eq 0 ]; then
+                                echo "Signature verification successful!"
+                            else
+                                echo "Signature verification failed!"
+                                exit 1
+                            fi
+                        """
+                    }
                 }
             }
         }
@@ -84,6 +90,7 @@ pipeline {
     
     post {
         always {
+            sh "docker logout quay.io"
             sh "rm -f cosign cosign.gz"
         }
     }
